@@ -1,12 +1,7 @@
 // index.js
-// PDF generation service — Vercel serverless.
-// Uses playwright-core + @sparticuz/chromium-min with a REMOTE Chromium tarball.
-// Sets LD_LIBRARY_PATH to the Chromium executable directory to fix libnss3.so.
-
 const express = require('express');
-const path = require('path');
 const { chromium: playwrightChromium } = require('playwright-core');
-const sparticuzChromium = require('@sparticuz/chromium-min');
+const sparticuzChromium = require('@sparticuz/chromium');
 const cors = require('cors');
 
 const app = express();
@@ -18,10 +13,6 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
 
 const PDF_TIMEOUT_MS = Number(process.env.PDF_TIMEOUT_MS || 55000);
 const MAX_PAYLOAD = process.env.MAX_PAYLOAD || '50mb';
-
-// ⭐ Remote Chromium tarball — must match the @sparticuz/chromium-min version.
-const DEFAULT_CHROMIUM_REMOTE =
-    'https://github.com/Sparticuz/chromium/releases/download/v131.0.0/chromium-v131.0.0-pack.tar';
 
 // ---- Middleware ----
 app.use(
@@ -50,30 +41,17 @@ let browserPromise = null;
 
 async function getBrowser() {
     if (!browserPromise) {
-        log('launching Chromium (sparticuz-min, remote tarball)...');
+        log('launching Chromium (@sparticuz/chromium)...');
         browserPromise = (async () => {
-            const remotePath =
-                process.env.CHROMIUM_REMOTE_EXEC_PATH || DEFAULT_CHROMIUM_REMOTE;
-
-            log('Chromium remote tarball:', remotePath);
-
-            const executablePath = await sparticuzChromium.executablePath(remotePath);
-            log('Chromium extracted to:', executablePath);
-
-            // ⭐ CRITICAL FIX: Set LD_LIBRARY_PATH to the directory containing
-            // the Chromium binary so it can find libnss3.so and other shared libs.
-            process.env.LD_LIBRARY_PATH = path.dirname(executablePath);
-            log('LD_LIBRARY_PATH set to:', process.env.LD_LIBRARY_PATH);
+            // The FULL @sparticuz/chromium package:
+            //   - ships .so libraries inside the npm package
+            //   - takes NO arguments to executablePath()
+            //   - handles LD_LIBRARY_PATH internally
+            const executablePath = await sparticuzChromium.executablePath();
+            log('Chromium executable at:', executablePath);
 
             const browser = await playwrightChromium.launch({
-                args: [
-                    ...sparticuzChromium.args,
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                    '--font-render-hinting=none',
-                ],
+                args: sparticuzChromium.args,
                 executablePath,
                 headless: true,
             });

@@ -1,7 +1,7 @@
 {
   "name": "pdf-server",
   "version": "1.0.0",
-  "description": "PDF generation service for Vercel (Playwright Core + @sparticuz/chromium-min)",
+  "description": "PDF generation service for Vercel (Playwright Core + @sparticuz/chromium)",
   "main": "index.js",
   "private": true,
   "engines": {
@@ -11,7 +11,7 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "@sparticuz/chromium-min": "^131.0.0",
+    "@sparticuz/chromium": "^131.0.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "playwright-core": "^1.48.0"
