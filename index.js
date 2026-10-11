@@ -1,5 +1,7 @@
 // index.js
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
 const { chromium: playwrightChromium } = require('playwright-core');
 const sparticuzChromium = require('@sparticuz/chromium');
 const cors = require('cors');
@@ -43,17 +45,42 @@ async function getBrowser() {
     if (!browserPromise) {
         log('launching Chromium (@sparticuz/chromium)...');
         browserPromise = (async () => {
-            // The FULL @sparticuz/chromium package:
-            //   - ships .so libraries inside the npm package
-            //   - takes NO arguments to executablePath()
-            //   - handles LD_LIBRARY_PATH internally
             const executablePath = await sparticuzChromium.executablePath();
             log('Chromium executable at:', executablePath);
 
+            // The .so files are extracted alongside the binary.
+            // We must add that directory to LD_LIBRARY_PATH or Chromium
+            // dies with "libnss3.so: cannot open shared object file".
+            const libDir = path.dirname(executablePath);
+            try {
+                const files = fs.readdirSync(libDir);
+                log(`Extracted ${files.length} files in ${libDir}`);
+                const soCount = files.filter((f) => f.endsWith('.so') || f.includes('.so.')).length;
+                log(`Found ${soCount} .so files`);
+            } catch (e) {
+                log('Could not list lib dir:', e.message);
+            }
+
+            const prevLd = process.env.LD_LIBRARY_PATH || '';
+            const newLd = prevLd ? `${libDir}:${prevLd}` : libDir;
+            process.env.LD_LIBRARY_PATH = newLd;
+            log('LD_LIBRARY_PATH =', newLd);
+
             const browser = await playwrightChromium.launch({
-                args: sparticuzChromium.args,
+                args: [
+                    ...sparticuzChromium.args,
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--font-render-hinting=none',
+                ],
                 executablePath,
                 headless: true,
+                env: {
+                    ...process.env,
+                    LD_LIBRARY_PATH: newLd,
+                },
             });
 
             log('Chromium launched, version:', browser.version());
