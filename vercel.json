@@ -1,4 +1,3 @@
-
 {
   "version": 2,
   "builds": [
@@ -6,18 +5,17 @@
       "src": "index.js",
       "use": "@vercel/node",
       "config": {
-        "includeFiles": "node_modules/@sparticuz/chromium/bin/**",
-        "maxLambdaSize": "250mb"
+        "includeFiles": [
+          "node_modules/@sparticuz/chromium/bin/**",
+          "fonts/**"
+        ],
+        "maxLambdaSize": "250mb",
+        "memory": 1024,
+        "maxDuration": 60
       }
     }
   ],
   "routes": [
     { "src": "/(.*)", "dest": "/index.js" }
-  ],
-  "functions": {
-    "index.js": {
-      "memory": 1024,
-      "maxDuration": 60
-    }
-  }
+  ]
 }

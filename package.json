@@ -6,7 +6,8 @@
     "node": "22.x"
   },
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "fetch-fonts": "node scripts/fetch-fonts.js"
   },
   "dependencies": {
     "@sparticuz/chromium": "131.0.1",
