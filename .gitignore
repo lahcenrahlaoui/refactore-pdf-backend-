@@ -47,3 +47,11 @@ __pycache__/
 env/
 venv/
 .venv/
+
+
+
+node_modules/
+.cache/
+*.log
+.env
+.env.* 

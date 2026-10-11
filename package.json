@@ -1,19 +1,19 @@
 {
-  "name": "server",
+  "name": "pdf-server",
   "version": "1.0.0",
-  "description": "",
+  "description": "Production PDF generation service using Playwright",
   "main": "index.js",
-  "scripts": {
-    "start": "node index.js",
-    "dev": "node --watch index.js"
+  "private": true,
+  "engines": {
+    "node": ">=18.0.0"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
+  "scripts": {
+    "postinstall": "playwright install chromium --with-deps",
+    "start": "node index.js"
+  },
   "dependencies": {
-    "cors": "^2.8.6",
-    "express": "^5.3.0",
-    "puppeteer": "^25.13.0"
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "playwright": "^1.48.0"
   }
-} 
+}
