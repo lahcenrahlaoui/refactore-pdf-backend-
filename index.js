@@ -10,8 +10,13 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean)
     : '*';
 
-const PDF_TIMEOUT_MS = Number(process.env.PDF_TIMEOUT_MS || 50000);
+const PDF_TIMEOUT_MS = Number(process.env.PDF_TIMEOUT_MS || 45000);
 const MAX_PAYLOAD = process.env.MAX_PAYLOAD || '4mb'; // Vercel body limit is ~4.5MB
+const SETTLE_MS = Number(process.env.SETTLE_MS || 300);
+
+// Optional hosted-browser fallback (Browserless / Browserbase).
+// If set, we skip the bundled Chromium entirely — reliable on Vercel, no extraction needed.
+const BROWSER_WS_ENDPOINT = process.env.BROWSER_WS_ENDPOINT || null;
 
 // Arabic-capable fonts (the bundled Chromium only ships Latin fonts)
 const FONT_URLS = [
@@ -36,47 +41,60 @@ app.get('/health', (_req, res) =>
     res.json({ ok: true, uptime: process.uptime() }),
 );
 
+// Graphics off ONCE, globally: faster cold start, not needed for PDFs.
+chromium.setGraphicsMode = false;
+
 let browserPromise = null;
 
-async function getBrowser() {
+async function createBrowser() {
+    // Hosted browser path (Browserless, Browserbase, ...)
+    if (BROWSER_WS_ENDPOINT) {
+        log('connecting to hosted browser...');
+        return puppeteer.connect({ browserWSEndpoint: BROWSER_WS_ENDPOINT });
+    }
+
+    // Local bundled Chromium path
+    log('launching Chromium...');
+
+    // Load fonts in PARALLEL, non-fatal, BEFORE launch (one extraction cycle)
+    const fontResults = await Promise.allSettled(FONT_URLS.map((u) => chromium.font(u)));
+    fontResults.forEach((r, i) => {
+        if (r.status === 'fulfilled') log('Font loaded:', FONT_URLS[i].split('/').pop());
+        else log('Font load failed (non-fatal):', FONT_URLS[i].split('/').pop(), r.reason && r.reason.message);
+    });
+
+    // Let the package extract its libs and set LD_LIBRARY_PATH itself.
+    const executablePath = await chromium.executablePath();
+    log('Chromium executable at:', executablePath);
+
+    const browser = await puppeteer.launch({
+        args: chromium.args,
+        executablePath,
+        headless: 'shell',
+        // Explicit protocol timeout: Vercel kills the lambda before puppeteer's
+        // default 180s, which surfaces as an unhelpful "Target closed" 500.
+        protocolTimeout: PDF_TIMEOUT_MS + 15000,
+    });
+
+    log('Chromium launched, version:', await browser.version());
+    return browser;
+}
+
+function getBrowser() {
     if (!browserPromise) {
-        log('launching Chromium...');
-        browserPromise = (async () => {
-            // Skip WebGL setup: faster cold start, not needed for PDFs
-            chromium.setGraphicsMode = false;
-
-            // Load fonts BEFORE launching (non-fatal if it fails)
-            for (const url of FONT_URLS) {
-                try {
-                    await chromium.font(url);
-                    log('Font loaded:', url.split('/').pop());
-                } catch (e) {
-                    log('Font load failed:', url.split('/').pop(), e.message);
-                }
-            }
-
-            // Let the package extract its libs and set LD_LIBRARY_PATH itself.
-            const executablePath = await chromium.executablePath();
-            log('Chromium executable at:', executablePath);
-
-            const browser = await puppeteer.launch({
-                args: puppeteer.defaultArgs({ args: chromium.args, headless: 'shell' }),
-                executablePath,
-                headless: 'shell',
-                defaultViewport: null,
-            });
-
-            log('Chromium launched, version:', await browser.version());
-            browser.on('disconnected', () => {
-                log('Chromium disconnected — will relaunch next request');
+        browserPromise = createBrowser()
+            .then((browser) => {
+                browser.on('disconnected', () => {
+                    log('Browser disconnected — will relaunch next request');
+                    browserPromise = null;
+                });
+                return browser;
+            })
+            .catch((err) => {
+                log('Browser launch failed:', err && err.stack ? err.stack : err);
                 browserPromise = null;
+                throw err;
             });
-            return browser;
-        })().catch((err) => {
-            log('Chromium launch failed:', err && err.stack ? err.stack : err);
-            browserPromise = null;
-            throw err;
-        });
     }
     return browserPromise;
 }
@@ -84,8 +102,9 @@ async function getBrowser() {
 function buildContentDisposition(filename) {
     const rawName = (filename || 'proposal.pdf')
         .replace(/[\\/:*?"<>|]/g, '').trim() || 'proposal.pdf';
-    const asciiFallback = rawName
-        .replace(/\.pdf$/i, '').replace(/[^\x20-\x7E]/g, '_').slice(0, 100) + '.pdf';
+    const base = rawName
+        .replace(/\.pdf$/i, '').replace(/[^\x20-\x7E]/g, '_').slice(0, 90);
+    const asciiFallback = `${base}.pdf`;
     const utf8Name = encodeURIComponent(rawName);
     return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${utf8Name}`;
 }
@@ -98,7 +117,7 @@ app.post('/api/generate-pdf', async (req, res) => {
 
     log(`PDF request: filename="${filename || 'proposal.pdf'}" htmlSize=${html.length}`);
 
-    let page;
+    let page = null;
     const started = Date.now();
 
     try {
@@ -108,18 +127,30 @@ app.post('/api/generate-pdf', async (req, res) => {
         page.setDefaultTimeout(PDF_TIMEOUT_MS);
         page.setDefaultNavigationTimeout(PDF_TIMEOUT_MS);
 
-        await page.setContent(html, {
-            waitUntil: 'networkidle0',
-            timeout: PDF_TIMEOUT_MS,
-        });
+        // IMPORTANT CHANGE: 'load' instead of 'networkidle0'.
+        // networkidle0 waits for 500ms of zero network activity — a slow or
+        // blocked external asset (fonts, analytics) hangs the whole render on
+        // Vercel until timeout. 'load' fires as soon as the document is ready.
+        try {
+            await page.setContent(html, {
+                waitUntil: 'load',
+                timeout: PDF_TIMEOUT_MS,
+            });
+        } catch (e) {
+            // A timeout here is often still salvageable — continue and try the PDF.
+            log('setContent warning (continuing):', e.message);
+        }
 
+        // Wait for web fonts (Arabic/RTL) to actually be ready
         try {
             await page.evaluate(async () => {
                 if (document.fonts && document.fonts.ready) await document.fonts.ready;
             });
         } catch (_) {}
 
-        await new Promise((r) => setTimeout(r, 300));
+        if (SETTLE_MS > 0) {
+            await new Promise((r) => setTimeout(r, SETTLE_MS));
+        }
 
         const pdfBuffer = Buffer.from(
             await page.pdf({
@@ -130,7 +161,7 @@ app.post('/api/generate-pdf', async (req, res) => {
             }),
         );
 
-        await page.close();
+        try { await page.close(); } catch (_) {}
         page = null;
 
         log(`PDF generated in ${Date.now() - started}ms, ${pdfBuffer.length} bytes`);
