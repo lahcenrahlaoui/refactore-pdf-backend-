@@ -1,22 +1,20 @@
 // index.js
-// Production PDF generation service for Render (Playwright + Docker).
+// PDF generation service — Vercel serverless friendly.
+// Uses playwright-core + @sparticuz/chromium instead of full playwright.
 
 const express = require('express');
-const { chromium } = require('playwright');
+const { chromium: playwrightChromium } = require('playwright-core');
+const sparticuzChromium = require('@sparticuz/chromium');
 const cors = require('cors');
 
 const app = express();
 
 // ---- Config ----
-const PORT = process.env.PORT || 3000;
-
-// Comma-separated list of allowed origins, e.g.
-//   ALLOWED_ORIGINS=https://myapp.vercel.app,https://myapp.com
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean)
     : '*';
 
-const PDF_TIMEOUT_MS = Number(process.env.PDF_TIMEOUT_MS || 60000);
+const PDF_TIMEOUT_MS = Number(process.env.PDF_TIMEOUT_MS || 55000);
 const MAX_PAYLOAD = process.env.MAX_PAYLOAD || '50mb';
 
 // ---- Middleware ----
@@ -41,45 +39,47 @@ app.get('/health', (_req, res) =>
     res.json({ ok: true, uptime: process.uptime() }),
 );
 
-// ---- Browser lifecycle (one instance, reused) ----
-// Launching Chromium costs ~1-2s. On Render's free tier (0.1 CPU),
-// keeping one warm instance dramatically improves latency.
+// ---- Browser lifecycle ----
+// In serverless we cannot cache a warm browser across invocations reliably,
+// but within a single invocation (or warm container) this still helps.
 let browserPromise = null;
 
 async function getBrowser() {
     if (!browserPromise) {
-        log('launching Chromium...');
-        browserPromise = chromium
-            .launch({
-                headless: true,
+        log('launching Chromium (sparticuz)...');
+        browserPromise = (async () => {
+            const executablePath = await sparticuzChromium.executablePath();
+            log('Chromium executable at:', executablePath);
+
+            const browser = await playwrightChromium.launch({
                 args: [
+                    ...sparticuzChromium.args,
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage', // /dev/shm is tiny on Render
+                    '--disable-dev-shm-usage',
                     '--disable-gpu',
-                    '--font-render-hinting=none', // better Arabic rendering
+                    '--font-render-hinting=none',
                 ],
-                // Playwright finds browsers at /ms-playwright automatically
-                // in the official Docker image. No path config needed.
-            })
-            .then((b) => {
-                log('Chromium launched, version:', b.version());
-                b.on('disconnected', () => {
-                    log('Chromium disconnected — will relaunch next request');
-                    browserPromise = null;
-                });
-                return b;
-            })
-            .catch((err) => {
-                log('Chromium launch failed:', err.message);
-                browserPromise = null;
-                throw err;
+                executablePath,
+                headless: true,
             });
+
+            log('Chromium launched, version:', browser.version());
+            browser.on('disconnected', () => {
+                log('Chromium disconnected — will relaunch next request');
+                browserPromise = null;
+            });
+            return browser;
+        })().catch((err) => {
+            log('Chromium launch failed:', err.message);
+            browserPromise = null;
+            throw err;
+        });
     }
     return browserPromise;
 }
 
-// ---- Build a safe Content-Disposition header (RFC 5987) ----
+// ---- Safe Content-Disposition header (RFC 5987) ----
 function buildContentDisposition(filename) {
     const rawName =
         (filename || 'proposal.pdf')
@@ -113,14 +113,12 @@ app.post('/api/generate-pdf', async (req, res) => {
     try {
         const browser = await getBrowser();
 
-        // Isolated context per request (no cookie/state leaks between users).
         context = await browser.newContext();
         page = await context.newPage();
 
         page.setDefaultTimeout(PDF_TIMEOUT_MS);
         page.setDefaultNavigationTimeout(PDF_TIMEOUT_MS);
 
-        // Silence page logs.
         page.on('console', () => {});
         page.on('pageerror', () => {});
 
@@ -129,7 +127,7 @@ app.post('/api/generate-pdf', async (req, res) => {
             timeout: PDF_TIMEOUT_MS,
         });
 
-        // Wait for webfonts (critical for Arabic typography).
+        // Wait for webfonts (Arabic).
         try {
             await page.evaluate(async () => {
                 if (document.fonts && document.fonts.ready) {
@@ -181,35 +179,14 @@ app.use((err, _req, res, _next) => {
     res.status(500).json({ error: 'Internal server error' });
 });
 
-// ---- Graceful shutdown (Render sends SIGTERM on redeploy) ----
-let shuttingDown = false;
-async function shutdown(signal) {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    log(`received ${signal}, shutting down...`);
-    try {
-        if (browserPromise) {
-            const b = await browserPromise;
-            await b.close();
-            log('Chromium closed');
-        }
-    } catch (_) { /* ignore */ }
-    process.exit(0);
+// ---- Export for Vercel; also listen for local dev ----
+module.exports = app;
+
+if (require.main === module) {
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, '0.0.0.0', () => {
+        log(`PDF server listening on port ${PORT}`);
+        log(`Allowed origins: ${Array.isArray(ALLOWED_ORIGINS) ? ALLOWED_ORIGINS.join(', ') : ALLOWED_ORIGINS}`);
+        log(`PDF timeout: ${PDF_TIMEOUT_MS}ms`);
+    });
 }
-
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('unhandledRejection', (r) => log('unhandledRejection:', r));
-
-// ---- Start ----
-app.listen(PORT, '0.0.0.0', () => {
-    log(`PDF server listening on port ${PORT}`);
-    log(
-        `Allowed origins: ${
-            Array.isArray(ALLOWED_ORIGINS)
-                ? ALLOWED_ORIGINS.join(', ')
-                : ALLOWED_ORIGINS
-        }`,
-    );
-    log(`PDF timeout: ${PDF_TIMEOUT_MS}ms`);
-});

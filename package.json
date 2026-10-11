@@ -1,18 +1,19 @@
 {
   "name": "pdf-server",
   "version": "1.0.0",
-  "description": "Production PDF generation service using Playwright",
+  "description": "PDF generation service for Vercel (Playwright Core + @sparticuz/chromium)",
   "main": "index.js",
   "private": true,
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
+    "@sparticuz/chromium": "^131.0.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "playwright": "1.63.0"
+    "playwright-core": "^1.48.0"
   }
 }
