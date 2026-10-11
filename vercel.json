@@ -5,7 +5,8 @@
       "src": "index.js",
       "use": "@vercel/node",
       "config": {
-        "includeFiles": "node_modules/@sparticuz/chromium/bin/**"
+        "includeFiles": "node_modules/@sparticuz/chromium/bin/**",
+        "maxLambdaSize": "250mb"
       }
     }
   ],

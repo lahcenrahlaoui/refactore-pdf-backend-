@@ -1,10 +1,8 @@
 // index.js
 const express = require('express');
-const path = require('path');
-const fs = require('fs');
-const { chromium: playwrightChromium } = require('playwright-core');
-const sparticuzChromium = require('@sparticuz/chromium');
 const cors = require('cors');
+const chromium = require('@sparticuz/chromium');
+const puppeteer = require('puppeteer-core');
 
 const app = express();
 
@@ -12,8 +10,14 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean)
     : '*';
 
-const PDF_TIMEOUT_MS = Number(process.env.PDF_TIMEOUT_MS || 55000);
-const MAX_PAYLOAD = process.env.MAX_PAYLOAD || '50mb';
+const PDF_TIMEOUT_MS = Number(process.env.PDF_TIMEOUT_MS || 50000);
+const MAX_PAYLOAD = process.env.MAX_PAYLOAD || '4mb'; // Vercel body limit is ~4.5MB
+
+// Arabic-capable fonts (the bundled Chromium only ships Latin fonts)
+const FONT_URLS = [
+    'https://raw.githubusercontent.com/notofonts/notofonts.github.io/main/fonts/NotoSansArabic/hinted/ttf/NotoSansArabic-Regular.ttf',
+    'https://raw.githubusercontent.com/notofonts/notofonts.github.io/main/fonts/NotoSansArabic/hinted/ttf/NotoSansArabic-Bold.ttf',
+];
 
 app.use(cors({
     origin: ALLOWED_ORIGINS,
@@ -38,46 +42,38 @@ async function getBrowser() {
     if (!browserPromise) {
         log('launching Chromium...');
         browserPromise = (async () => {
-            const executablePath = await sparticuzChromium.executablePath();
-            log('Chromium executable at:', executablePath);
+            // Skip WebGL setup: faster cold start, not needed for PDFs
+            chromium.setGraphicsMode = false;
 
-            const libDir = path.dirname(executablePath);
-            try {
-                const files = fs.readdirSync(libDir);
-                log(`Extracted ${files.length} files in ${libDir}`);
-                const soCount = files.filter((f) => f.endsWith('.so') || f.includes('.so.')).length;
-                log(`Found ${soCount} .so files`);
-            } catch (e) {
-                log('Could not list lib dir:', e.message);
+            // Load fonts BEFORE launching (non-fatal if it fails)
+            for (const url of FONT_URLS) {
+                try {
+                    await chromium.font(url);
+                    log('Font loaded:', url.split('/').pop());
+                } catch (e) {
+                    log('Font load failed:', url.split('/').pop(), e.message);
+                }
             }
 
-            const prevLd = process.env.LD_LIBRARY_PATH || '';
-            const newLd = prevLd ? `${libDir}:${prevLd}` : libDir;
-            process.env.LD_LIBRARY_PATH = newLd;
-            log('LD_LIBRARY_PATH =', newLd);
+            // Let the package extract its libs and set LD_LIBRARY_PATH itself.
+            const executablePath = await chromium.executablePath();
+            log('Chromium executable at:', executablePath);
 
-            const browser = await playwrightChromium.launch({
-                args: [
-                    ...sparticuzChromium.args,
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                    '--font-render-hinting=none',
-                ],
+            const browser = await puppeteer.launch({
+                args: puppeteer.defaultArgs({ args: chromium.args, headless: 'shell' }),
                 executablePath,
-                headless: true,
-                env: { ...process.env, LD_LIBRARY_PATH: newLd },
+                headless: 'shell',
+                defaultViewport: null,
             });
 
-            log('Chromium launched, version:', browser.version());
+            log('Chromium launched, version:', await browser.version());
             browser.on('disconnected', () => {
                 log('Chromium disconnected — will relaunch next request');
                 browserPromise = null;
             });
             return browser;
         })().catch((err) => {
-            log('Chromium launch failed:', err.message);
+            log('Chromium launch failed:', err && err.stack ? err.stack : err);
             browserPromise = null;
             throw err;
         });
@@ -102,20 +98,20 @@ app.post('/api/generate-pdf', async (req, res) => {
 
     log(`PDF request: filename="${filename || 'proposal.pdf'}" htmlSize=${html.length}`);
 
-    let context, page;
+    let page;
     const started = Date.now();
 
     try {
         const browser = await getBrowser();
-        context = await browser.newContext();
-        page = await context.newPage();
+        page = await browser.newPage();
 
         page.setDefaultTimeout(PDF_TIMEOUT_MS);
         page.setDefaultNavigationTimeout(PDF_TIMEOUT_MS);
-        page.on('console', () => {});
-        page.on('pageerror', () => {});
 
-        await page.setContent(html, { waitUntil: 'networkidle', timeout: PDF_TIMEOUT_MS });
+        await page.setContent(html, {
+            waitUntil: 'networkidle0',
+            timeout: PDF_TIMEOUT_MS,
+        });
 
         try {
             await page.evaluate(async () => {
@@ -123,17 +119,19 @@ app.post('/api/generate-pdf', async (req, res) => {
             });
         } catch (_) {}
 
-        await page.waitForTimeout(300);
+        await new Promise((r) => setTimeout(r, 300));
 
-        const pdfBuffer = await page.pdf({
-            format: 'A4',
-            printBackground: true,
-            preferCSSPageSize: true,
-            margin: { top: 0, right: 0, bottom: 0, left: 0 },
-        });
+        const pdfBuffer = Buffer.from(
+            await page.pdf({
+                format: 'A4',
+                printBackground: true,
+                preferCSSPageSize: true,
+                margin: { top: 0, right: 0, bottom: 0, left: 0 },
+            }),
+        );
 
-        await context.close();
-        context = null; page = null;
+        await page.close();
+        page = null;
 
         log(`PDF generated in ${Date.now() - started}ms, ${pdfBuffer.length} bytes`);
 
@@ -143,10 +141,11 @@ app.post('/api/generate-pdf', async (req, res) => {
         res.setHeader('Cache-Control', 'no-store');
         res.end(pdfBuffer);
     } catch (err) {
-        log('PDF generation failed:', err.message);
+        log('PDF generation failed:', err && err.stack ? err.stack : err);
         if (page) { try { await page.close(); } catch (_) {} }
-        if (context) { try { await context.close(); } catch (_) {} }
-        res.status(500).json({ error: (err && err.message) || 'PDF generation failed' });
+        res.status(500).json({
+            error: (err && err.message ? err.message : 'PDF generation failed').slice(0, 500),
+        });
     }
 });
 

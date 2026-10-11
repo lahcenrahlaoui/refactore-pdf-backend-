@@ -3,15 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "engines": {
-    "node": ">=20.0.0"
+    "node": "22.x"
   },
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@sparticuz/chromium": "^131.0.0",
+    "@sparticuz/chromium": "131.0.1",
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "playwright-core": "^1.48.0"
+    "puppeteer-core": "23.10.4"
   }
 }
