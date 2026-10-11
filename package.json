@@ -1,8 +1,6 @@
 {
   "name": "pdf-server",
   "version": "1.0.0",
-  "description": "PDF generation service for Vercel (Playwright Core + @sparticuz/chromium)",
-  "main": "index.js",
   "private": true,
   "engines": {
     "node": ">=20.0.0"
