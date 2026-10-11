@@ -1,10 +1,10 @@
 // index.js
 // PDF generation service — Vercel serverless friendly.
-// Uses playwright-core + @sparticuz/chromium instead of full playwright.
+// Uses playwright-core + @sparticuz/chromium-min instead of full playwright.
 
 const express = require('express');
 const { chromium: playwrightChromium } = require('playwright-core');
-const sparticuzChromium = require('@sparticuz/chromium');
+const sparticuzChromium = require('@sparticuz/chromium-min'); // Use the -min version
 const cors = require('cors');
 
 const app = express();
@@ -40,14 +40,14 @@ app.get('/health', (_req, res) =>
 );
 
 // ---- Browser lifecycle ----
-// In serverless we cannot cache a warm browser across invocations reliably,
-// but within a single invocation (or warm container) this still helps.
 let browserPromise = null;
 
 async function getBrowser() {
     if (!browserPromise) {
         log('launching Chromium (sparticuz)...');
         browserPromise = (async () => {
+            // For @sparticuz/chromium-min, you may need to provide the path
+            // to the bin directory if automatic detection fails.
             const executablePath = await sparticuzChromium.executablePath();
             log('Chromium executable at:', executablePath);
 
