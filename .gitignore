@@ -1,0 +1,49 @@
+# System Files
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+
+# Development Environments & Tools
+.env
+.env.local
+*.env
+.idea/
+.vscode/
+*.swp
+
+# Compiled Code & Packages
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.so
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# Logs & Databases
+*.log
+*.sqlite
+
+# Node.js / JavaScript
+node_modules/
+/dist
+/build
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
