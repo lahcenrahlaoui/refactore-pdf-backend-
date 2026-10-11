@@ -1,7 +1,6 @@
 // index.js
 // PDF generation service — Vercel serverless.
 // Uses playwright-core + @sparticuz/chromium-min with a REMOTE Chromium tarball.
-// The remote approach avoids Vercel's file-tracing bug that drops the bundled bin/ folder.
 
 const express = require('express');
 const { chromium: playwrightChromium } = require('playwright-core');
@@ -18,8 +17,6 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
 const PDF_TIMEOUT_MS = Number(process.env.PDF_TIMEOUT_MS || 55000);
 const MAX_PAYLOAD = process.env.MAX_PAYLOAD || '50mb';
 
-// ⭐ Remote Chromium tarball — must match the @sparticuz/chromium-min version.
-// You can override via Vercel env var CHROMIUM_REMOTE_EXEC_PATH.
 const DEFAULT_CHROMIUM_REMOTE =
     'https://github.com/Sparticuz/chromium/releases/download/v131.0.0/chromium-v131.0.0-pack.tar';
 
@@ -57,7 +54,6 @@ async function getBrowser() {
 
             log('Chromium remote tarball:', remotePath);
 
-            // executablePath() accepts a remote URL for the -min package.
             const executablePath = await sparticuzChromium.executablePath(remotePath);
             log('Chromium extracted to:', executablePath);
 
@@ -137,7 +133,6 @@ app.post('/api/generate-pdf', async (req, res) => {
             timeout: PDF_TIMEOUT_MS,
         });
 
-        // Wait for webfonts (Arabic).
         try {
             await page.evaluate(async () => {
                 if (document.fonts && document.fonts.ready) {
