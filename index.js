@@ -1,5 +1,5 @@
 // index.js
-// Production PDF generation service for Render (Playwright).
+// Production PDF generation service for Render (Playwright + Docker).
 
 const express = require('express');
 const { chromium } = require('playwright');
@@ -10,6 +10,8 @@ const app = express();
 // ---- Config ----
 const PORT = process.env.PORT || 3000;
 
+// Comma-separated list of allowed origins, e.g.
+//   ALLOWED_ORIGINS=https://myapp.vercel.app,https://myapp.com
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean)
     : '*';
@@ -40,6 +42,8 @@ app.get('/health', (_req, res) =>
 );
 
 // ---- Browser lifecycle (one instance, reused) ----
+// Launching Chromium costs ~1-2s. On Render's free tier (0.1 CPU),
+// keeping one warm instance dramatically improves latency.
 let browserPromise = null;
 
 async function getBrowser() {
@@ -51,12 +55,12 @@ async function getBrowser() {
                 args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
+                    '--disable-dev-shm-usage', // /dev/shm is tiny on Render
                     '--disable-gpu',
-                    '--no-zygote',
-                    '--single-process',
-                    '--font-render-hinting=none',
+                    '--font-render-hinting=none', // better Arabic rendering
                 ],
+                // Playwright finds browsers at /ms-playwright automatically
+                // in the official Docker image. No path config needed.
             })
             .then((b) => {
                 log('Chromium launched, version:', b.version());
@@ -75,7 +79,7 @@ async function getBrowser() {
     return browserPromise;
 }
 
-// ---- Content-Disposition helper (RFC 5987) ----
+// ---- Build a safe Content-Disposition header (RFC 5987) ----
 function buildContentDisposition(filename) {
     const rawName =
         (filename || 'proposal.pdf')
@@ -125,7 +129,7 @@ app.post('/api/generate-pdf', async (req, res) => {
             timeout: PDF_TIMEOUT_MS,
         });
 
-        // Wait for webfonts (Arabic).
+        // Wait for webfonts (critical for Arabic typography).
         try {
             await page.evaluate(async () => {
                 if (document.fonts && document.fonts.ready) {
@@ -177,7 +181,7 @@ app.use((err, _req, res, _next) => {
     res.status(500).json({ error: 'Internal server error' });
 });
 
-// ---- Graceful shutdown ----
+// ---- Graceful shutdown (Render sends SIGTERM on redeploy) ----
 let shuttingDown = false;
 async function shutdown(signal) {
     if (shuttingDown) return;
