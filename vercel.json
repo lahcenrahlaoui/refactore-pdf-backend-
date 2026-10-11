@@ -1,0 +1,9 @@
+{
+  "functions": {
+    "index.js": {
+      "memory": 2048,
+      "maxDuration": 60,
+      "includeFiles": "node_modules/@sparticuz/chromium/bin/**"
+    }
+  }
+}
