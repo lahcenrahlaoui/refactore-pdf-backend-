@@ -10,9 +10,7 @@
     "index.js": {
       "memory": 2048,
       "maxDuration": 60,
-      "includeFiles": [
-        "node_modules/@sparticuz/chromium-min/bin/**"
-      ]
+      "includeFiles": "node_modules/@sparticuz/chromium-min/bin/**"
     }
   }
 }
