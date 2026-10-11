@@ -1,10 +1,11 @@
 // index.js
-// PDF generation service — Vercel serverless friendly.
-// Uses playwright-core + @sparticuz/chromium-min instead of full playwright.
+// PDF generation service — Vercel serverless.
+// Uses playwright-core + @sparticuz/chromium-min with a REMOTE Chromium tarball.
+// The remote approach avoids Vercel's file-tracing bug that drops the bundled bin/ folder.
 
 const express = require('express');
 const { chromium: playwrightChromium } = require('playwright-core');
-const sparticuzChromium = require('@sparticuz/chromium-min'); // Use the -min version
+const sparticuzChromium = require('@sparticuz/chromium-min');
 const cors = require('cors');
 
 const app = express();
@@ -16,6 +17,11 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
 
 const PDF_TIMEOUT_MS = Number(process.env.PDF_TIMEOUT_MS || 55000);
 const MAX_PAYLOAD = process.env.MAX_PAYLOAD || '50mb';
+
+// ⭐ Remote Chromium tarball — must match the @sparticuz/chromium-min version.
+// You can override via Vercel env var CHROMIUM_REMOTE_EXEC_PATH.
+const DEFAULT_CHROMIUM_REMOTE =
+    'https://github.com/Sparticuz/chromium/releases/download/v131.0.0/chromium-v131.0.0-pack.tar';
 
 // ---- Middleware ----
 app.use(
@@ -33,7 +39,7 @@ function log(...args) {
     console.log(`[${new Date().toISOString()}]`, ...args);
 }
 
-// ---- Health checks ----
+// ---- Health ----
 app.get('/', (_req, res) => res.json({ service: 'pdf-server', status: 'ok' }));
 app.get('/health', (_req, res) =>
     res.json({ ok: true, uptime: process.uptime() }),
@@ -44,12 +50,16 @@ let browserPromise = null;
 
 async function getBrowser() {
     if (!browserPromise) {
-        log('launching Chromium (sparticuz)...');
+        log('launching Chromium (sparticuz-min, remote tarball)...');
         browserPromise = (async () => {
-            // For @sparticuz/chromium-min, you may need to provide the path
-            // to the bin directory if automatic detection fails.
-            const executablePath = await sparticuzChromium.executablePath();
-            log('Chromium executable at:', executablePath);
+            const remotePath =
+                process.env.CHROMIUM_REMOTE_EXEC_PATH || DEFAULT_CHROMIUM_REMOTE;
+
+            log('Chromium remote tarball:', remotePath);
+
+            // executablePath() accepts a remote URL for the -min package.
+            const executablePath = await sparticuzChromium.executablePath(remotePath);
+            log('Chromium extracted to:', executablePath);
 
             const browser = await playwrightChromium.launch({
                 args: [
@@ -186,7 +196,13 @@ if (require.main === module) {
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, '0.0.0.0', () => {
         log(`PDF server listening on port ${PORT}`);
-        log(`Allowed origins: ${Array.isArray(ALLOWED_ORIGINS) ? ALLOWED_ORIGINS.join(', ') : ALLOWED_ORIGINS}`);
+        log(
+            `Allowed origins: ${
+                Array.isArray(ALLOWED_ORIGINS)
+                    ? ALLOWED_ORIGINS.join(', ')
+                    : ALLOWED_ORIGINS
+            }`,
+        );
         log(`PDF timeout: ${PDF_TIMEOUT_MS}ms`);
     });
 }
